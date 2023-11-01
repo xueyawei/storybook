@@ -3,7 +3,7 @@ import prettier from 'prettier';
 import * as t from '@babel/types';
 import { isIdentifier, isTSTypeAnnotation, isTSTypeReference } from '@babel/types';
 import type { CsfFile } from '@storybook/csf-tools';
-import { loadCsf, printCsf } from '@storybook/csf-tools';
+import { loadCsf, printCsfOriginal } from '@storybook/csf-tools';
 import type { API, FileInfo } from 'jscodeshift';
 import type { BabelFile, NodePath } from '@babel/core';
 import * as babel from '@babel/core';
@@ -88,9 +88,9 @@ const isSimpleCSFStory = (init: t.Expression, annotations: t.ObjectProperty[]) =
   annotations.length === 0 && t.isArrowFunctionExpression(init) && init.params.length === 0;
 
 function removeUnusedTemplates(csf: CsfFile) {
-  Object.entries(csf._templates).forEach(([template, templateExpression]) => {
+  Object.entries(csf._originalTemplates).forEach(([template, templateExpression]) => {
     const references: NodePath[] = [];
-    babel.traverse(csf._ast, {
+    babel.traverse(csf._astOriginal, {
       Identifier: (path) => {
         if (path.node.name === template) references.push(path);
       },
@@ -113,7 +113,7 @@ export default function transform(info: FileInfo, api: API, options: { parser?: 
   const makeTitle = (userTitle?: string) => {
     return userTitle || 'FIXME';
   };
-  const csf = loadCsf(info.source, { makeTitle });
+  const csf = loadCsf(info.source, info.source, { makeTitle });
 
   try {
     csf.parse();
@@ -126,16 +126,18 @@ export default function transform(info: FileInfo, api: API, options: { parser?: 
   // @ts-expect-error File is not yet exposed, see https://github.com/babel/babel/issues/11350#issuecomment-644118606
   const file: BabelFile = new babel.File(
     { filename: info.path },
-    { code: info.source, ast: csf._ast }
+    { code: info.source, ast: csf._astOriginal }
   );
 
   const importHelper = new StorybookImportHelper(file, info);
 
   const objectExports: Record<string, t.Statement> = {};
-  Object.entries(csf._storyExports).forEach(([key, decl]) => {
-    const annotations = Object.entries(csf._storyAnnotations[key]).map(([annotation, val]) => {
-      return t.objectProperty(t.identifier(renameAnnotation(annotation)), val as t.Expression);
-    });
+  Object.entries(csf._originalStoryExports).forEach(([key, decl]) => {
+    const annotations = Object.entries(csf._originalStoryAnnotations[key]).map(
+      ([annotation, val]) => {
+        return t.objectProperty(t.identifier(renameAnnotation(annotation)), val as t.Expression);
+      }
+    );
 
     if (t.isVariableDeclarator(decl)) {
       const { init, id } = decl;
@@ -162,7 +164,7 @@ export default function transform(info: FileInfo, api: API, options: { parser?: 
       // export const A = Template.bind({});
       const renderAnnotation = isReactGlobalRenderFn(
         csf,
-        template ? csf._templates[template] : storyFn
+        template ? csf._originalTemplates[template] : storyFn
       )
         ? []
         : [t.objectProperty(t.identifier('render'), storyFn)];
@@ -178,7 +180,7 @@ export default function transform(info: FileInfo, api: API, options: { parser?: 
     }
   });
 
-  csf._ast.program.body = csf._ast.program.body.reduce((acc, stmt) => {
+  csf._astOriginal.program.body = csf._astOriginal.program.body.reduce((acc, stmt) => {
     const statement = stmt as t.Statement;
     // remove story annotations & template declarations
     if (isStoryAnnotation(statement, objectExports)) {
@@ -201,7 +203,7 @@ export default function transform(info: FileInfo, api: API, options: { parser?: 
   importHelper.removeDeprecatedStoryImport();
   removeUnusedTemplates(csf);
 
-  let output = printCsf(csf).code;
+  let output = printCsfOriginal(csf).code;
 
   try {
     const prettierConfig = prettier.resolveConfig.sync('.', { editorconfig: true }) || {
